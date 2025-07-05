@@ -1,13 +1,13 @@
 # Release v1.0.0
 
-Released on: 2025-07-05 17:58:47 UTC
+Released on: 2025-07-05 18:14:57 UTC
 Tag: v1.0.0
-Commit: 99f56c5780f219ee33b2699a4ad44689ab953c41
+Commit: 515f8e780a14f5bb0660212f912ab602be96ad47
 Trigger: workflow_dispatch
 
 ## Build Information
 - Workflow: Build and Release
-- Run ID: 16090662673
+- Run ID: 16090799418
 - Actor: syntakt
 
 ## Custom Release Notes
@@ -15,9 +15,9 @@ Trigger: workflow_dispatch
 
 ## Artifacts
 Available files:
-total 15020
-drwxr-xr-x 2 runner docker     4096 Jul  5 17:58 .
-drwxr-xr-x 8 runner docker     4096 Jul  5 17:58 ..
--rw-r--r-- 1 runner docker 15360714 Jul  5 17:58 ip_cidr_processor_windows-latest.exe
--rw-r--r-- 1 runner docker        6 Jul  5 17:58 version.txt
--rw-r--r-- 1 runner docker       13 Jul  5 17:58 windows_version.txt
+total 15144
+drwxr-xr-x 2 runner docker     4096 Jul  5 18:14 .
+drwxr-xr-x 8 runner docker     4096 Jul  5 18:14 ..
+-rw-r--r-- 1 runner docker 15489073 Jul  5 18:14 ip_cidr_processor_windows-latest.exe
+-rw-r--r-- 1 runner docker        6 Jul  5 18:14 version.txt
+-rw-r--r-- 1 runner docker       13 Jul  5 18:14 windows_version.txt
