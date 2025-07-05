@@ -1,0 +1,119 @@
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest] #ubuntu-latest,
+        python-version: ['3.12']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests>=2.28.1 PyYAML>=6.0 pyinstaller>=5.0
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      shell: bash
+      
+    - name: Update spec file for current OS
+      run: |
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          sed -i 's/os_name = .*/os_name = "windows-latest"/g' ip_cidr_processor.spec
+        else
+          sed -i 's/os_name = .*/os_name = "ubuntu-latest"/g' ip_cidr_processor.spec
+        fi
+      shell: bash
+    
+    - name: Build executable
+      run: |
+        pyinstaller ip_cidr_processor.spec
+      shell: bash
+        
+    - name: List build artifacts (Windows)
+      if: matrix.os == 'windows-latest'
+      run: Get-ChildItem dist/
+      shell: pwsh
+      
+    - name: List build artifacts (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: ls -la dist/
+      shell: bash
+    
+    - name: Create version file
+      run: |
+        VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+        VERSION=${VERSION#v}
+        if [ "$VERSION" == "main" ] || [ "$VERSION" == "master" ]; then
+          VERSION=$(date +'%Y%m%d%H%M')
+        fi
+        echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+        
+        # Ensure dist directory exists
+        mkdir -p dist
+        
+        # Create platform-specific version files
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          echo "$VERSION" > dist/windows_version.txt
+        else
+          echo "$VERSION" > dist/linux_version.txt
+        fi
+      shell: bash
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ip_cidr_processor_${{ matrix.os }}
+        path: dist/
+        if-no-files-found: warn
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        merge-multiple: true
+        
+    - name: Display structure of downloaded files
+      run: ls -R artifacts/
+    
+    - name: Create single version file
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "$VERSION" > artifacts/version.txt
+    
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: IP CIDR Processor ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        files: |
+          artifacts/ip_cidr_processor_ubuntu-latest
+          artifacts/ip_cidr_processor_windows-latest.exe
+          artifacts/version.txt
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
