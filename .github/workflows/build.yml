@@ -4,15 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (optional)'
-        required: false
-        default: ''
+        description: 'Release version (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
         type: string
       create_release:
-        description: 'Create release after build'
+        description: 'Create GitHub Release'
+        required: false
+        default: true
+        type: boolean
+      prerelease:
+        description: 'Mark as pre-release'
         required: false
         default: false
         type: boolean
+      release_notes:
+        description: 'Custom release notes (optional)'
+        required: false
+        type: string
   push:
     branches: [ main, master ]
     tags:
@@ -98,8 +107,11 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
     
     steps:
       - name: Checkout code
@@ -107,6 +119,20 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Set version from input or tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            echo "Using manual version: $VERSION"
+            # Create tag for manual dispatch
+            git tag "v$VERSION"
+            git push origin "v$VERSION"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "Using tag version: $VERSION"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
       
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -119,85 +145,98 @@ jobs:
       
       - name: Create single version file
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "$VERSION" > artifacts/version.txt
-      
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        with:
-          name: IP CIDR Processor ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-          files: |
-            artifacts/ip_cidr_processor_ubuntu-latest
-            artifacts/ip_cidr_processor_windows-latest.exe
-            artifacts/version.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "${{ env.VERSION }}" > artifacts/version.txt
       
       - name: Setup Git config
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
       
-      - name: Create release branch and push
+      - name: Prepare release files
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          RELEASE_BRANCH="release/v$VERSION"
+          VERSION=${{ env.VERSION }}
           
-          # Create and checkout release branch
-          git checkout -b $RELEASE_BRANCH
-          
-          # Copy release artifacts to repository
+          # Create releases directory
           mkdir -p releases/v$VERSION
-          cp -r artifacts/* releases/v$VERSION/
           
-          # Add release info file
+          # Copy artifacts
+          cp -r artifacts/* releases/v$VERSION/ || true
+          
+          # Create release info
           cat > releases/v$VERSION/RELEASE_INFO.md << EOF
           # Release v$VERSION
           
-          Released on: $(date)
-          Tag: ${{ github.ref_name }}
+          Released on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          Tag: v$VERSION
+          Commit: ${{ github.sha }}
+          Trigger: ${{ github.event_name }}
+          
+          ## Build Information
+          - Workflow: ${{ github.workflow }}
+          - Run ID: ${{ github.run_id }}
+          - Actor: ${{ github.actor }}
+          
+          ## Custom Release Notes
+          ${{ github.event.inputs.release_notes }}
           
           ## Artifacts
-          - Windows executable: ip_cidr_processor_windows-latest.exe
-          - Linux executable: ip_cidr_processor_ubuntu-latest
-          - Version file: version.txt
-          
-          ## Release Notes
-          ${{ steps.create_release.outputs.body }}
           EOF
           
-          # Add and commit changes
-          git add releases/v$VERSION/
-          git commit -m "Add release artifacts for v$VERSION"
+          # List actual files in artifacts
+          echo "Available files:" >> releases/v$VERSION/RELEASE_INFO.md
+          ls -la artifacts/ >> releases/v$VERSION/RELEASE_INFO.md || echo "No artifacts found" >> releases/v$VERSION/RELEASE_INFO.md
           
-          # Push release branch
-          git push origin $RELEASE_BRANCH
-          
-          # Switch back to main and merge release branch
-          git checkout main
-          git merge $RELEASE_BRANCH --no-ff -m "Merge release v$VERSION into main"
-          
-          # Push updated main branch
-          git push origin main
-          
-          # Clean up release branch
-          git branch -d $RELEASE_BRANCH
-          git push origin --delete $RELEASE_BRANCH
-      
-      - name: Update latest release pointer
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          
-          # Update latest release file
+          # Update latest release pointer
           echo "v$VERSION" > LATEST_RELEASE
-          echo "$(date)" >> LATEST_RELEASE
-          echo "${{ steps.create_release.outputs.html_url }}" >> LATEST_RELEASE
-          
-          # Commit and push
+          echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> LATEST_RELEASE
+          echo "https://github.com/${{ github.repository }}/releases/tag/v$VERSION" >> LATEST_RELEASE
+      
+      - name: Commit and push release files
+        run: |
+          # Check if there are changes to commit
+          git add releases/v${{ env.VERSION }}/
           git add LATEST_RELEASE
-          git commit -m "Update latest release pointer to v$VERSION"
-          git push origin main
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "📦 Add release artifacts for v${{ env.VERSION }}"
+            git push origin main
+          fi
+      
+      - name: Create GitHub Release
+        id: create_release
+        if: github.event.inputs.create_release != 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: IP CIDR Processor v${{ env.VERSION }}
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          generate_release_notes: true
+          body: |
+            🚀 **Release v${{ env.VERSION }}**
+            
+            Built on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+            Commit: ${{ github.sha }}
+            Trigger: ${{ github.event_name }}
+            
+            ${{ github.event.inputs.release_notes }}
+            
+            ## Download
+            Choose the appropriate executable for your platform:
+            
+            ### Files in this release:
+          files: |
+            artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Verify release creation
+        run: |
+          echo "✅ Release process completed!"
+          echo "🔗 Release URL: ${{ steps.create_release.outputs.url }}"
+          echo "📁 Release files committed to repository"
+          echo "🏷️  Tag: v${{ env.VERSION }}"
+          echo "📋 Files in repository:"
+          ls -la releases/v${{ env.VERSION }}/ || echo "Release directory not found"
