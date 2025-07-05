@@ -2,6 +2,17 @@ name: Build and Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (optional)'
+        required: false
+        default: ''
+        type: string
+      create_release:
+        description: 'Create release after build'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [ main, master ]
     tags:
