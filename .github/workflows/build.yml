@@ -28,68 +28,66 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
         python-version: ['3.12']
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests>=2.28.1 PyYAML>=6.0 pyinstaller>=5.0
+        pip install "requests>=2.28.1" "PyYAML>=6.0" "pyinstaller>=5.0"
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       shell: bash
-      
+
     - name: Update spec file for current OS
       run: |
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+        OS="${{ matrix.os }}"
+        if [ "$OS" = "windows-latest" ]; then
           sed -i 's/os_name = .*/os_name = "windows-latest"/g' ip_cidr_processor.spec
         else
           sed -i 's/os_name = .*/os_name = "ubuntu-latest"/g' ip_cidr_processor.spec
         fi
       shell: bash
-    
+
     - name: Build executable
-      run: |
-        pyinstaller ip_cidr_processor.spec
+      run: pyinstaller ip_cidr_processor.spec
       shell: bash
-        
+
     - name: List build artifacts (Windows)
       if: matrix.os == 'windows-latest'
       run: Get-ChildItem dist/
-      shell: pwsh
-      
+      shell: powershell
+
     - name: List build artifacts (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: ls -la dist/
       shell: bash
-    
+
     - name: Create version and prepare artifacts
       run: |
-        # Определяем версию
+        OS="${{ matrix.os }}"
         if [[ "${{ github.event.inputs.version }}" != "" ]]; then
           VERSION="${{ github.event.inputs.version }}"
         elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-          VERSION=$(echo "${{ github.ref }}" | sed -e 's/refs\/tags\/v//')
-        elif [[ "${{ github.ref }}" == refs/heads/main ]] || [[ "${{ github.ref }}" == refs/heads/master ]]; then
+          VERSION="${{ github.ref#refs/tags/v }}"
+        elif [[ "${{ github.ref }}" == refs/heads/main || "${{ github.ref }}" == refs/heads/master ]]; then
           VERSION="dev-$(date +'%Y%m%d%H%M')"
         else
           VERSION="pr-$(date +'%Y%m%d%H%M')"
         fi
-        
+
         echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
         echo "Version: $VERSION"
-        
-        # Создаем папку для артефактов
+
         mkdir -p release_artifacts
-        
-        # Копируем исполняемые файлы с правильными именами
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+
+        if [ "$OS" = "windows-latest" ]; then
           if [ -f "dist/ip_cidr_processor.exe" ]; then
             cp "dist/ip_cidr_processor.exe" "release_artifacts/ip_cidr_processor_windows.exe"
           else
@@ -105,15 +103,12 @@ jobs:
             ls -la dist/
           fi
         fi
-        
-        # Создаем файл версии
-        echo "$VERSION" > "release_artifacts/version_${{ matrix.os }}.txt"
-        
-        # Показываем что получилось
+
+        echo "$VERSION" > "release_artifacts/version_${OS}.txt"
         echo "Release artifacts:"
         ls -la release_artifacts/
       shell: bash
-    
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -124,62 +119,40 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true') ||
+      startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
     - name: Download all build artifacts
       uses: actions/download-artifact@v4
       with:
         path: artifacts
-        
+
     - name: Display structure of downloaded files
       run: |
         echo "Downloaded artifacts structure:"
         find artifacts -type f -exec ls -la {} \;
-    
+
     - name: Prepare release files
       run: |
-        # Создаем папку для релиза
         mkdir -p release
-        
-        # Извлекаем версию из тега
-        VERSION=${GITHUB_REF#refs/tags/v}
+        VERSION="${GITHUB_REF#refs/tags/v}"
         echo "Release version: $VERSION"
-        
-        # Объединяем все файлы из артефактов
+
         find artifacts -name "*.exe" -exec cp {} release/ \;
         find artifacts -name "ip_cidr_processor_linux" -exec cp {} release/ \;
-        
-        # Создаем общий файл версии
         echo "$VERSION" > release/version.txt
-        
-        # Создаем README для релиза
-        cat > release/README.txt << EOF
-IP CIDR Processor v$VERSION
 
-Файлы в релизе:
-- ip_cidr_processor_windows.exe - исполняемый файл для Windows
-- ip_cidr_processor_linux - исполняемый файл для Linux
-- version.txt - файл с версией релиза
-
-Использование:
-Windows: ip_cidr_processor_windows.exe
-Linux: chmod +x ip_cidr_processor_linux && ./ip_cidr_processor_linux
-
-Дата сборки: $(date)
-Коммит: ${{ github.sha }}
-EOF
-        
-        # Показываем финальную структуру
         echo "Final release structure:"
         ls -la release/
-    
+
     - name: Create Release
       id: create_release
       uses: softprops/action-gh-release@v2
@@ -193,29 +166,28 @@ EOF
           release/*
         body: |
           ## IP CIDR Processor ${{ github.ref_name }}
-          
+
           ### Поддерживаемые платформы:
           - Windows (x64)
           - Linux (x64)
-          
+
           ### Файлы релиза:
-          - `ip_cidr_processor_windows.exe` - для Windows
-          - `ip_cidr_processor_linux` - для Linux
-          - `version.txt` - информация о версии
-          - `README.txt` - инструкции по использованию
-          
+          - `ip_cidr_processor_windows.exe` — для Windows
+          - `ip_cidr_processor_linux` — для Linux
+          - `version.txt` — информация о версии
+
           ### Использование:
           ```bash
           # Windows
           ip_cidr_processor_windows.exe
-          
+
           # Linux
           chmod +x ip_cidr_processor_linux
           ./ip_cidr_processor_linux
           ```
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    
+
     - name: Upload release artifacts summary
       run: |
         echo "Release created successfully!"
