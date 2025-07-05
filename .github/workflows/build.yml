@@ -1,3 +1,5 @@
+name: Build and Release
+
 on:
   workflow_dispatch:
   push:
@@ -13,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest] #ubuntu-latest,
+        os: [windows-latest] #, ubuntu-latest]
         python-version: ['3.12']
     
     steps:
@@ -56,64 +58,153 @@ jobs:
       run: ls -la dist/
       shell: bash
     
-    - name: Create version file
+    - name: Create version and prepare artifacts
       run: |
-        VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
-        VERSION=${VERSION#v}
-        if [ "$VERSION" == "main" ] || [ "$VERSION" == "master" ]; then
-          VERSION=$(date +'%Y%m%d%H%M')
-        fi
-        echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
-        
-        # Ensure dist directory exists
-        mkdir -p dist
-        
-        # Create platform-specific version files
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          echo "$VERSION" > dist/windows_version.txt
+        # Определяем версию
+        if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          VERSION=$(echo "${{ github.ref }}" | sed -e 's/refs\/tags\/v//')
+        elif [[ "${{ github.ref }}" == refs/heads/main ]] || [[ "${{ github.ref }}" == refs/heads/master ]]; then
+          VERSION="dev-$(date +'%Y%m%d%H%M')"
         else
-          echo "$VERSION" > dist/linux_version.txt
+          VERSION="pr-$(date +'%Y%m%d%H%M')"
         fi
+        
+        echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+        echo "Version: $VERSION"
+        
+        # Создаем папку для артефактов
+        mkdir -p release_artifacts
+        
+        # Копируем исполняемые файлы с правильными именами
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          if [ -f "dist/ip_cidr_processor.exe" ]; then
+            cp "dist/ip_cidr_processor.exe" "release_artifacts/ip_cidr_processor_windows.exe"
+          else
+            echo "Windows executable not found in dist/"
+            ls -la dist/
+          fi
+        else
+          if [ -f "dist/ip_cidr_processor" ]; then
+            cp "dist/ip_cidr_processor" "release_artifacts/ip_cidr_processor_linux"
+            chmod +x "release_artifacts/ip_cidr_processor_linux"
+          else
+            echo "Linux executable not found in dist/"
+            ls -la dist/
+          fi
+        fi
+        
+        # Создаем файл версии
+        echo "$VERSION" > "release_artifacts/version_${{ matrix.os }}.txt"
+        
+        # Показываем что получилось
+        echo "Release artifacts:"
+        ls -la release_artifacts/
       shell: bash
     
-    - name: Upload artifact
+    - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ip_cidr_processor_${{ matrix.os }}
-        path: dist/
-        if-no-files-found: warn
+        name: build-${{ matrix.os }}
+        path: release_artifacts/
+        retention-days: 7
+        if-no-files-found: error
 
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
-    - name: Download all artifacts
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download all build artifacts
       uses: actions/download-artifact@v4
       with:
         path: artifacts
-        merge-multiple: true
         
     - name: Display structure of downloaded files
-      run: ls -R artifacts/
-    
-    - name: Create single version file
       run: |
+        echo "Downloaded artifacts structure:"
+        find artifacts -type f -exec ls -la {} \;
+    
+    - name: Prepare release files
+      run: |
+        # Создаем папку для релиза
+        mkdir -p release
+        
+        # Извлекаем версию из тега
         VERSION=${GITHUB_REF#refs/tags/v}
-        echo "$VERSION" > artifacts/version.txt
+        echo "Release version: $VERSION"
+        
+        # Объединяем все файлы из артефактов
+        find artifacts -name "*.exe" -exec cp {} release/ \;
+        find artifacts -name "ip_cidr_processor_linux" -exec cp {} release/ \;
+        
+        # Создаем общий файл версии
+        echo "$VERSION" > release/version.txt
+        
+        # Создаем README для релиза
+        cat > release/README.txt << EOF
+IP CIDR Processor v$VERSION
+
+Файлы в релизе:
+- ip_cidr_processor_windows.exe - исполняемый файл для Windows
+- ip_cidr_processor_linux - исполняемый файл для Linux
+- version.txt - файл с версией релиза
+
+Использование:
+Windows: ip_cidr_processor_windows.exe
+Linux: chmod +x ip_cidr_processor_linux && ./ip_cidr_processor_linux
+
+Дата сборки: $(date)
+Коммит: ${{ github.sha }}
+EOF
+        
+        # Показываем финальную структуру
+        echo "Final release structure:"
+        ls -la release/
     
     - name: Create Release
       id: create_release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         name: IP CIDR Processor ${{ github.ref_name }}
+        tag_name: ${{ github.ref_name }}
         draft: false
         prerelease: false
         generate_release_notes: true
         files: |
-          artifacts/ip_cidr_processor_ubuntu-latest
-          artifacts/ip_cidr_processor_windows-latest.exe
-          artifacts/version.txt
+          release/*
+        body: |
+          ## IP CIDR Processor ${{ github.ref_name }}
+          
+          ### Поддерживаемые платформы:
+          - Windows (x64)
+          - Linux (x64)
+          
+          ### Файлы релиза:
+          - `ip_cidr_processor_windows.exe` - для Windows
+          - `ip_cidr_processor_linux` - для Linux
+          - `version.txt` - информация о версии
+          - `README.txt` - инструкции по использованию
+          
+          ### Использование:
+          ```bash
+          # Windows
+          ip_cidr_processor_windows.exe
+          
+          # Linux
+          chmod +x ip_cidr_processor_linux
+          ./ip_cidr_processor_linux
+          ```
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Upload release artifacts summary
+      run: |
+        echo "Release created successfully!"
+        echo "Release URL: ${{ steps.create_release.outputs.url }}"
+        echo "Release ID: ${{ steps.create_release.outputs.id }}"
