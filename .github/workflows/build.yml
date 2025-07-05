@@ -2,17 +2,6 @@ name: Build and Release
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version (optional)'
-        required: false
-        default: ''
-        type: string
-      create_release:
-        description: 'Create release after build'
-        required: false
-        default: false
-        type: boolean
   push:
     branches: [ main, master ]
     tags:
@@ -26,170 +15,178 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest] #ubuntu-latest,
         python-version: ['3.12']
-
+    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install "requests>=2.28.1" "PyYAML>=6.0" "pyinstaller>=5.0"
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      shell: bash
-
-    - name: Update spec file for current OS
-      run: |
-        OS="${{ matrix.os }}"
-        if [ "$OS" = "windows-latest" ]; then
-          sed -i 's/os_name = .*/os_name = "windows-latest"/g' ip_cidr_processor.spec
-        else
-          sed -i 's/os_name = .*/os_name = "ubuntu-latest"/g' ip_cidr_processor.spec
-        fi
-      shell: bash
-
-    - name: Build executable
-      run: pyinstaller ip_cidr_processor.spec
-      shell: bash
-
-    - name: List build artifacts (Windows)
-      if: matrix.os == 'windows-latest'
-      run: Get-ChildItem dist/
-      shell: powershell
-
-    - name: List build artifacts (Linux)
-      if: matrix.os == 'ubuntu-latest'
-      run: ls -la dist/
-      shell: bash
-
-    - name: Create version and prepare artifacts
-      run: |
-        OS="${{ matrix.os }}"
-        if [[ "${{ github.event.inputs.version }}" != "" ]]; then
-          VERSION="${{ github.event.inputs.version }}"
-        elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-          VERSION="${{ github.ref#refs/tags/v }}"
-        elif [[ "${{ github.ref }}" == refs/heads/main || "${{ github.ref }}" == refs/heads/master ]]; then
-          VERSION="dev-$(date +'%Y%m%d%H%M')"
-        else
-          VERSION="pr-$(date +'%Y%m%d%H%M')"
-        fi
-
-        echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
-        echo "Version: $VERSION"
-
-        mkdir -p release_artifacts
-
-        if [ "$OS" = "windows-latest" ]; then
-          if [ -f "dist/ip_cidr_processor.exe" ]; then
-            cp "dist/ip_cidr_processor.exe" "release_artifacts/ip_cidr_processor_windows.exe"
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests>=2.28.1 PyYAML>=6.0 pyinstaller>=5.0
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        shell: bash
+      
+      - name: Update spec file for current OS
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            sed -i 's/os_name = .*/os_name = "windows-latest"/g' ip_cidr_processor.spec
           else
-            echo "Windows executable not found in dist/"
-            ls -la dist/
+            sed -i 's/os_name = .*/os_name = "ubuntu-latest"/g' ip_cidr_processor.spec
           fi
-        else
-          if [ -f "dist/ip_cidr_processor" ]; then
-            cp "dist/ip_cidr_processor" "release_artifacts/ip_cidr_processor_linux"
-            chmod +x "release_artifacts/ip_cidr_processor_linux"
+        shell: bash
+      
+      - name: Build executable
+        run: |
+          pyinstaller ip_cidr_processor.spec
+        shell: bash
+      
+      - name: List build artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        run: Get-ChildItem dist/
+        shell: pwsh
+      
+      - name: List build artifacts (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: ls -la dist/
+        shell: bash
+      
+      - name: Create version file
+        run: |
+          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+          VERSION=${VERSION#v}
+          if [ "$VERSION" == "main" ] || [ "$VERSION" == "master" ]; then
+            VERSION=$(date +'%Y%m%d%H%M')
+          fi
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+          
+          # Ensure dist directory exists
+          mkdir -p dist
+          
+          # Create platform-specific version files
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            echo "$VERSION" > dist/windows_version.txt
           else
-            echo "Linux executable not found in dist/"
-            ls -la dist/
+            echo "$VERSION" > dist/linux_version.txt
           fi
-        fi
-
-        echo "$VERSION" > "release_artifacts/version_${OS}.txt"
-        echo "Release artifacts:"
-        ls -la release_artifacts/
-      shell: bash
-
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-${{ matrix.os }}
-        path: release_artifacts/
-        retention-days: 7
-        if-no-files-found: error
+        shell: bash
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ip_cidr_processor_${{ matrix.os }}
+          path: dist/
+          if-no-files-found: warn
 
   release:
     needs: build
-    if: |
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true') ||
-      startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
+    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Download all build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-
-    - name: Display structure of downloaded files
-      run: |
-        echo "Downloaded artifacts structure:"
-        find artifacts -type f -exec ls -la {} \;
-
-    - name: Prepare release files
-      run: |
-        mkdir -p release
-        VERSION="${GITHUB_REF#refs/tags/v}"
-        echo "Release version: $VERSION"
-
-        find artifacts -name "*.exe" -exec cp {} release/ \;
-        find artifacts -name "ip_cidr_processor_linux" -exec cp {} release/ \;
-        echo "$VERSION" > release/version.txt
-
-        echo "Final release structure:"
-        ls -la release/
-
-    - name: Create Release
-      id: create_release
-      uses: softprops/action-gh-release@v2
-      with:
-        name: IP CIDR Processor ${{ github.ref_name }}
-        tag_name: ${{ github.ref_name }}
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-        files: |
-          release/*
-        body: |
-          ## IP CIDR Processor ${{ github.ref_name }}
-
-          ### Поддерживаемые платформы:
-          - Windows (x64)
-          - Linux (x64)
-
-          ### Файлы релиза:
-          - `ip_cidr_processor_windows.exe` — для Windows
-          - `ip_cidr_processor_linux` — для Linux
-          - `version.txt` — информация о версии
-
-          ### Использование:
-          ```bash
-          # Windows
-          ip_cidr_processor_windows.exe
-
-          # Linux
-          chmod +x ip_cidr_processor_linux
-          ./ip_cidr_processor_linux
-          ```
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload release artifacts summary
-      run: |
-        echo "Release created successfully!"
-        echo "Release URL: ${{ steps.create_release.outputs.url }}"
-        echo "Release ID: ${{ steps.create_release.outputs.id }}"
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      
+      - name: Display structure of downloaded files
+        run: ls -R artifacts/
+      
+      - name: Create single version file
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "$VERSION" > artifacts/version.txt
+      
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: IP CIDR Processor ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/ip_cidr_processor_ubuntu-latest
+            artifacts/ip_cidr_processor_windows-latest.exe
+            artifacts/version.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Git config
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+      
+      - name: Create release branch and push
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          RELEASE_BRANCH="release/v$VERSION"
+          
+          # Create and checkout release branch
+          git checkout -b $RELEASE_BRANCH
+          
+          # Copy release artifacts to repository
+          mkdir -p releases/v$VERSION
+          cp -r artifacts/* releases/v$VERSION/
+          
+          # Add release info file
+          cat > releases/v$VERSION/RELEASE_INFO.md << EOF
+          # Release v$VERSION
+          
+          Released on: $(date)
+          Tag: ${{ github.ref_name }}
+          
+          ## Artifacts
+          - Windows executable: ip_cidr_processor_windows-latest.exe
+          - Linux executable: ip_cidr_processor_ubuntu-latest
+          - Version file: version.txt
+          
+          ## Release Notes
+          ${{ steps.create_release.outputs.body }}
+          EOF
+          
+          # Add and commit changes
+          git add releases/v$VERSION/
+          git commit -m "Add release artifacts for v$VERSION"
+          
+          # Push release branch
+          git push origin $RELEASE_BRANCH
+          
+          # Switch back to main and merge release branch
+          git checkout main
+          git merge $RELEASE_BRANCH --no-ff -m "Merge release v$VERSION into main"
+          
+          # Push updated main branch
+          git push origin main
+          
+          # Clean up release branch
+          git branch -d $RELEASE_BRANCH
+          git push origin --delete $RELEASE_BRANCH
+      
+      - name: Update latest release pointer
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          
+          # Update latest release file
+          echo "v$VERSION" > LATEST_RELEASE
+          echo "$(date)" >> LATEST_RELEASE
+          echo "${{ steps.create_release.outputs.html_url }}" >> LATEST_RELEASE
+          
+          # Commit and push
+          git add LATEST_RELEASE
+          git commit -m "Update latest release pointer to v$VERSION"
+          git push origin main
