@@ -35,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows 10] #ubuntu-latest,
+        os: [windows-10] #ubuntu-latest,
         python-version: ['3.12']
     
     steps:
@@ -56,8 +56,8 @@ jobs:
       
       - name: Update spec file for current OS
         run: |
-          if [ "${{ matrix.os }}" = "windows 10" ]; then
-            sed -i 's/os_name = .*/os_name = "windows 10"/g' ip_cidr_processor.spec
+          if [ "${{ matrix.os }}" = "windows-10" ]; then
+            sed -i 's/os_name = .*/os_name = "windows-10"/g' ip_cidr_processor.spec
           else
             sed -i 's/os_name = .*/os_name = "ubuntu-latest"/g' ip_cidr_processor.spec
           fi
@@ -69,7 +69,7 @@ jobs:
         shell: bash
       
       - name: List build artifacts (Windows)
-        if: matrix.os == 'windows 10'
+        if: matrix.os == 'windows-10'
         run: Get-ChildItem dist/
         shell: pwsh
       
